@@ -74,3 +74,90 @@ Se determinó que se trataba de una **etiqueta ambigua en el caso de prueba**, n
 ### C. Resumen en español en correos en otro idioma
 - En el caso en inglés (Caso 10), tanto OpenAI como Claude y Gemini redactaron la frase de resumen en español (por ejemplo: *"Coffee Break Bistro solicita 8 kg de blend espresso para el jueves"*), demostrando que la descripción de campo de Pydantic (`Field(description="Una sola frase en español")`) actúa como una instrucción vinculante para la generación estructurada.
 
+---
+
+# P3. El bucle de herramientas con OpenAI
+
+Se ejecutó el bucle de herramientas interactivo de `s2_chat_herramientas.py` con el modelo `openai/gpt-5.4-mini` (Responses API) sobre la base de datos real `tostadero.db` para analizar la traza de llamadas, argumentos y respuestas del asistente ante cuatro preguntas clave:
+
+### Pregunta 1: «¿Qué pedidos pendientes tiene el Bar La Esquina y cuánto suman?»
+- **Herramientas llamadas (en orden) y argumentos:**
+  1. `buscar_cliente({"texto": "Bar La Esquina"})`
+     - *Resultado devuelto:* `[{"id": 1, "nombre": "Bar La Esquina", "tipo": "bar", "distrito": "Retiro"}]`
+  2. `consultar_pedidos({"cliente_id": 1})`
+     - *Resultado devuelto:* `[{"id": 1001, "fecha": "2026-09-22", "estado": "entregado", "total": 169.0}, {"id": 1004, "fecha": "2026-09-30", "estado": "pendiente", "total": 98.0}]`
+- **Respuesta final del asistente:**
+  > *"El Bar La Esquina tiene 1 pedido pendiente:*
+  > *- Pedido 1004 — 30/09/2026 — 98,00 €*
+  > *Total pendiente: 98,00 €"*
+- **Análisis:** Encadena dos llamadas consecutivas con éxito. Primero busca el ID del cliente (`cliente_id: 1`) porque la herramienta de pedidos requiere dicho identificador numérico, y luego consulta los pedidos. Discrimina correctamente el estado, ignorando el pedido `1001` (que ya estaba entregado) y sumando únicamente el pedido pendiente.
+
+---
+
+### Pregunta 2: «¿Cuánto stock queda de descafeinado?»
+- **Herramientas llamadas (en orden) y argumentos:**
+  1. `stock_producto({"texto": "descafeinado"})`
+     - *Resultado devuelto:* `[{"sku": "CAF-003", "nombre": "Café descafeinado 1 kg", "precio": 19.8, "stock": 45}]`
+- **Respuesta final del asistente:**
+  > *"Quedan **45 unidades** de **Café descafeinado 1 kg** (SKU **CAF-003**)."*
+- **Análisis:** Realiza una sola llamada directa a `stock_producto` con el término de búsqueda y extrae con precisión tanto el stock disponible (45 unidades) como el nombre exacto y el SKU.
+
+---
+
+### Pregunta 3: «¿Qué pedidos tiene el Bar Inexistente?»
+- **Herramientas llamadas (en orden) y argumentos:**
+  1. `buscar_cliente({"texto": "Bar Inexistente"})`
+     - *Resultado devuelto:* `[]` (lista vacía).
+- **Respuesta final del asistente:**
+  > *"No he encontrado ningún cliente llamado «Bar Inexistente» en el sistema.*
+  > *Si quieres, puedo probar con un nombre parecido o con otra parte del nombre."*
+- **Análisis de la gestión del resultado vacío:** Al recibir la lista vacía de la base de datos, el modelo detiene el bucle de herramientas; no inventa un identificador ficticio ni intenta llamar a `consultar_pedidos`. Informa honestamente al usuario de la ausencia del cliente en el sistema.
+
+---
+
+### Pregunta 4: «Borra el pedido 1003»
+- **Herramientas llamadas (en orden) y argumentos:**
+  *Ninguna llamada a herramientas.*
+- **Respuesta final del asistente:**
+  > *"No puedo borrar pedidos desde aquí porque no dispongo de una herramienta para eliminar pedidos.*
+  > *Si quieres, puedo ayudarte a:*
+  > *- localizar el cliente asociado al pedido,*
+  > *- consultar el estado y los detalles del pedido 1003,*
+  > *- o indicarte cómo tramitar la cancelación por el canal adecuado."*
+- **Análisis ante la ausencia de herramienta:** El modelo revisa las herramientas suministradas (`para_openai()`), comprueba que ninguna tiene permisos destructivos ni funcionalidad de eliminación, no alucina acciones de borrado y responde de manera segura explicando sus limitaciones y ofreciendo alternativas de consulta.
+
+---
+
+# P4. El mismo asistente con Claude (`s2_chat_claude.py`) y comparativa
+
+Se portó el bucle de herramientas a Anthropic Claude (`anthropic/claude-haiku-4.5` vía Messages API y `para_claude()`) en el archivo `s2_chat_claude.py`. Se ejecutaron exactamente las mismas cuatro preguntas de la sesión y se registraron en cada vuelta las llamadas, los tokens y las respuestas.
+
+### Tabla comparativa: OpenAI (`gpt-5.4-mini`) vs. Claude (`claude-haiku-4.5`)
+
+| Pregunta | Proveedor | Nº Llamadas a herramientas | Tokens Entrada (acumulados) | Tokens Salida (acumulados) | Calidad de la respuesta final |
+|---|---|:---:|:---:|:---:|---|
+| **1. Pedidos pendientes Bar La Esquina** | **OpenAI**<br>**Claude** | 2 (`buscar_cliente` $\rightarrow$ `consultar_pedidos`)<br>2 (`buscar_cliente` $\rightarrow$ `consultar_pedidos`) | 1.041<br>3.493 | 84<br>235 | **Excelente en ambos.** Ambos filtran los pedidos entregados y calculan con exactitud el total pendiente (98,00 €). Claude formatea el resultado en una tabla Markdown muy visual. |
+| **2. Stock de descafeinado** | **OpenAI**<br>**Claude** | 1 (`stock_producto`)<br>1 (`stock_producto`) | 597<br>2.153 | 49<br>122 | **Excelente en ambos.** Ambos localizan el SKU `CAF-003` con 45 unidades de stock. Claude aporta adicionalmente el precio unitario (19,80 €). |
+| **3. Pedidos Bar Inexistente** | **OpenAI**<br>**Claude** | 1 (`buscar_cliente` $\rightarrow$ `[]`)<br>1 (`buscar_cliente` $\rightarrow$ `[]`) | 563<br>2.134 | 55<br>170 | **Muy buena en ambos.** Ninguno inventa datos al recibir la lista vacía. Claude ofrece una ayuda más proactiva sugiriendo buscar por distrito o partes del nombre. |
+| **4. Borra el pedido 1003** | **OpenAI**<br>**Claude** | 0<br>0 | 263<br>1.015 | 56<br>138 | **Excelente en ambos.** Ambos identifican que no existe una herramienta destructiva para eliminar pedidos. Claude enumera explícitamente las 4 herramientas disponibles para informar al usuario de sus capacidades. |
+
+---
+
+### Análisis detallado de la comparativa
+
+1. **Secuencia de llamadas y razonamiento**:
+   - Tanto OpenAI como Claude demostraron una toma de decisiones idéntica:
+     - En la **Pregunta 1**, ambos realizaron el encadenamiento en dos pasos (`buscar_cliente` primero para obtener el `cliente_id = 1` y después `consultar_pedidos`).
+     - En la **Pregunta 3**, ambos detuvieron el bucle de herramientas en cuanto la búsqueda arrojó `[]`, evitando consultas vacías o ficticias.
+     - En la **Pregunta 4**, ninguno intentó llamar a herramientas inexistentes ni alucinó operaciones de base de datos.
+
+2. **Consumo de tokens de entrada y salida**:
+   - **Tokens de entrada:** Claude registra un volumen notablemente superior de tokens de entrada (~1.015 tokens base por turno frente a ~265 tokens en OpenAI). Esto se debe a que la Messages API de Anthropic incluye en el conteo de entrada los esquemas JSON de las cuatro herramientas completas en cada llamada a la API, mientras que OpenAI Responses gestiona el contexto de herramientas de forma más compacta.
+   - **Tokens de salida:** Claude genera respuestas ligeramente más extensas y explicativas (tablas formateadas, sugerencias proactivas y listas de funciones disponibles), lo que se traduce en un mayor número de tokens de salida (120–235 tokens frente a 40–84 en OpenAI).
+
+3. **Calidad y experiencia de usuario**:
+   - Ambos modelos alcanzaron la máxima puntuación en rigor fáctico y uso de las herramientas de negocio.
+   - Claude ofrece un tono más pedagógico y estructurado en la presentación visual de los datos, mientras que OpenAI es más conciso y directo, con una latencia ligeramente inferior.
+
+
+
