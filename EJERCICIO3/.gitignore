@@ -1,0 +1,21 @@
+# Entorno y credenciales (¡NUNCA subir a GitHub!)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Entornos virtuales
+.venv/
+venv/
+ENV/
+env/
+
+# Base de datos local (opcional si es temporal o contiene datos de prueba modificados)
+# tostadero.db
+
